@@ -1,0 +1,227 @@
+---
+title: "Task2 Coursera Capestone: Exploratory Data Analysis."
+author: "Deepesh Madkar"
+date: "1/20/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<hr>
+#### Overview:
+The goal of this project is to create your prediction algorithm and do basic exploratory analysis.
+To make the process of understanding simple, i have added the comment on the important lines to explain the steps to reach to the goal.
+
+<!-- http://www.bannedwordlist.com/ -->
+
+#### Links For The Raw Data:
+
+<p>
+The data for this project are available here:
+<ul>
+  <li>
+  Link to download traning data: [Training Data CSV]("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+  </li>
+  </ul>
+</p>
+
+```{r}
+# To reproduce the result please change the working directory
+workingDirectory = "/Projects/Rworkspace/coursera/capstone/week2"
+setwd(workingDirectory)
+```
+
+```{r results='hide', message=FALSE, warning=FALSE}
+
+
+library(dplyr)
+library(tm)
+library(SnowballC)
+library(RWeka)
+library(ggplot2)
+
+
+```
+
+
+```{r cache = TRUE}
+
+# checking if data directory exists if not creating it
+if(!file.exists("./data")){
+  dir.create("data")
+}
+
+# checking if the dataset zip exists else downloading it
+if(!file.exists("./data/Coursera-SwiftKey.zip")){
+  datsetUrlPath <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+  download.file(datsetUrlPath, "./data/Coursera-SwiftKey.zip",method="curl")
+}
+
+# unziping the swift key    
+if(!file.exists("./data/SwiftKeyData")){
+  unzip("./data/Coursera-SwiftKey.zip", exdir = "./data/SwiftKeyData")  
+}
+
+if(!file.exists("./data/bannedWords.txt")){
+  datsetUrlPath <- "http://www.bannedwordlist.com/lists/swearWords.txt"
+  download.file(datsetUrlPath, "./data/bannedWords.txt",method="curl")
+}
+
+
+
+# returns the file size in mb
+getFileSizeInMb <- function(path, type = "file"){
+  if(type == "obj"){
+    return(paste((object.size(path)/1000)/1000,"MB"))  
+  }else{
+    return(paste((file.info(path)$size/1000)/1000,"MB"))  
+  }
+}
+
+
+# Loading the file path for US english version
+usBlogsFilePath <- "./data/SwiftKeyData/final/en_US/en_US.blogs.txt"
+usNewsFilePath <- "./data/SwiftKeyData/final/en_US/en_US.news.txt"
+usTwitterFilePath <- "./data/SwiftKeyData/final/en_US/en_US.twitter.txt"
+
+
+
+
+# loading the blogs dataset
+fileConnection <- file(usBlogsFilePath, "rb")
+blogsDataset <- readLines(fileConnection, encoding = "UTF-8", skipNul = TRUE, warn = FALSE)
+close(fileConnection)
+
+# loading the news dataset
+fileConnection <- file(usNewsFilePath, "rb")
+newsDataset <- readLines(fileConnection, encoding = "UTF-8", skipNul = TRUE, warn = FALSE)
+close(fileConnection)
+
+# loading the twitter dataset
+fileConnection <- file(usTwitterFilePath, "rb")
+twitterDataset <- readLines(fileConnection, encoding = "UTF-8", skipNul = TRUE, warn = FALSE)
+close(fileConnection)
+
+# loading the banned dataset
+fileConnection <- file("./data/bannedWords.txt", "rb")
+bannedDataset <- readLines(fileConnection, encoding = "UTF-8", skipNul = TRUE, warn = FALSE)
+close(fileConnection)
+```
+
+
+```{r cache= TRUE}
+# file size
+dataFileSize <- data_frame(
+  dataset_name = c("blogs", "news", "twitter"),
+  size = c(getFileSizeInMb(usBlogsFilePath), getFileSizeInMb(usNewsFilePath), getFileSizeInMb(usTwitterFilePath)) ,
+  lines = c(length(blogsDataset), length(newsDataset), length(twitterDataset)),
+  words = c(sum(sapply(gregexpr("\\S+", blogsDataset), length)), sum(sapply(gregexpr("\\S+", newsDataset), length)), sum(sapply(gregexpr("\\S+", twitterDataset), length)))
+)
+names(dataFileSize) <- c("Dataset Name", "Size in MB", "Nos. Of Lines", "Nos. Of Words")
+
+dataFileSize
+
+
+```
+
+```{r cache = TRUE}
+
+# sampling the 15% of the data since the data is lot huge
+set.seed(1007)
+sampleSize = 15
+
+createDataSample <- function(data, size){
+  return(sample(data, length(data)*(size/100), replace = FALSE))
+}
+
+blogs15Dataset <- createDataSample(blogsDataset, sampleSize)
+news15Dataset <- createDataSample(newsDataset, sampleSize)
+twitter15Dataset <- createDataSample(twitterDataset, sampleSize)
+
+
+# file size
+data15FileSize <- data_frame(
+  dataset_name = c("blogs", "news", "twitter"),
+  size = c(getFileSizeInMb(blogs15Dataset, "obj"), getFileSizeInMb(news15Dataset, "obj"), getFileSizeInMb(twitter15Dataset, "obj")) ,
+  lines = c(length(blogs15Dataset), length(news15Dataset), length(twitter15Dataset)),
+  words = c(sum(sapply(gregexpr("\\S+", blogs15Dataset), length)), sum(sapply(gregexpr("\\S+", news15Dataset), length)), sum(sapply(gregexpr("\\S+", twitter15Dataset), length)))
+)
+names(data15FileSize) <- c("Dataset Name", "Size in MB", "Nos. Of Lines", "Nos. Of Words")
+
+data15FileSize
+```
+
+```{r}
+full15SampleDataset <- c(blogs15Dataset, news15Dataset, twitter15Dataset)
+corpus <- Corpus(VectorSource(full15SampleDataset))
+
+decimalsRemoval <- function(x) {gsub("([0-9]*)\\.([0-9]+)", "\\1 \\2", x)}
+hashtagsRemoval <- function(x) { gsub("#[a-zA-z0-9]+", " ", x)}
+
+corpus <- tm_map(corpus, decimalsRemoval)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, hashtagsRemoval)
+corpus <- tm_map(corpus, stripWhitespace)
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, tolower)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, removeWords, bannedDataset)
+
+
+
+# creating a document term matrix 
+# single words
+singleWordDTm <- DocumentTermMatrix(corpus)
+singleWordDTm
+
+# word pairs
+pairWordDTM <- DocumentTermMatrix(corpus, control = list(tokenize = function(x){ return(NGramTokenizer(x, Weka_control(min = 2, max = 2))) } ))
+pairWordDTM
+
+
+termCounts <- data_frame(
+  dtm=c("words", "word_pairs"),
+   dtm_count=c(singleWordDTm$ncol, pairWordDTM$ncol)
+  )
+
+termCounts
+
+
+
+# Explore
+
+singleFreq <- colSums(as.matrix(singleWordDTm))
+singleFreq <- sort(singleFreq, decreasing = T)
+pairFreq <- colSums(as.matrix(pairWordDTM))
+pairFreq <- sort(pairFreq, decreasing = T)
+
+singleFreqDataset <- data_frame(
+  word=names(singleFreq), 
+  freq=singleFreq
+  )
+
+pairFreqDataset <- data_frame(
+  word=names(pairFreq), 
+  freq=pairFreq
+  )
+
+head(singleFreq, 10)
+tail(singleFreq, 10)
+
+ggplot(subset(singleFreqDataset, freq>10000), aes(word, freq)) %>%
+geom_bar(stat="identity")  %>%
+theme(axis.text.x=element_text(angle=45, hjust=1)) %>%
+ggtitle("Most frequent words") 
+
+head(pairFreq, 10)
+tail(pairFreq, 10)
+
+ggplot(subset(pairFreqDataset, freq>10000), aes(word, freq)) %>%
+geom_bar(stat="identity")  %>%
+theme(axis.text.x=element_text(angle=45, hjust=1)) %>%
+ggtitle("Most frequent words") 
+
+
+```
+
